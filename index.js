@@ -18,8 +18,8 @@ const tokenCache = new NodeCache({ stdTTL: 3600 * 24 }); // cache token for 24h
 // ----------------------
 // GOOGLE BUSINESS PROFILE IDS
 // ----------------------
-const ACCOUNT_ID = '15209761812700196433'; // Business Profile ID
-const LOCATION_ID = '16343617315798725542'; // Location ID / Store code
+const ACCOUNT_ID = '15209761812700196433'; // Your Business Profile ID
+const LOCATION_ID = '16343617315798725542'; // Your Location ID (Store code)
 
 // ----------------------
 // GOOGLE OAUTH CLIENT
@@ -66,25 +66,26 @@ app.get('/oauth2callback', async (req, res) => {
 // ----------------------
 app.get('/reviews', async (req, res) => {
   try {
-    // Load cached token
     const cachedToken = tokenCache.get('google_token');
     if (!cachedToken) return res.status(401).send('Not authorized. Visit /auth first.');
 
     oAuth2Client.setCredentials(cachedToken);
 
-    // Correct Google API initialization
-    const businessprofile = google.businessprofile('v1');
+    // Use the correct Business Profile Performance API
+    const businessprofile = google.businessprofileperformance({
+      version: 'v1',
+      auth: oAuth2Client
+    });
 
     console.log('Fetching reviews for:', `accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}`);
 
     const response = await businessprofile.accounts.locations.reviews.list({
-      parent: `accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}`,
-      auth: oAuth2Client
+      parent: `accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}`
     });
 
     const reviews = response.data.reviews || [];
 
-    // Format reviews for frontend
+    // Format reviews
     const formatted = reviews.map(r => ({
       author: r.reviewer?.displayName || 'Anonymous',
       rating: r.starRating,
