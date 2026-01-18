@@ -13,13 +13,13 @@ const PORT = process.env.PORT || 3000;
 // ----------------------
 // TOKEN CACHE
 // ----------------------
-const tokenCache = new NodeCache({ stdTTL: 3600 * 24 }); // 24h cache
+const tokenCache = new NodeCache({ stdTTL: 3600 * 24 }); // cache token for 24h
 
 // ----------------------
 // GOOGLE BUSINESS PROFILE IDS
 // ----------------------
 const ACCOUNT_ID = '15209761812700196433'; // Business Profile ID
-const LOCATION_ID = '16343617315798725542'; // Location ID / Store Code
+const LOCATION_ID = '16343617315798725542'; // Location ID / Store code
 
 // ----------------------
 // GOOGLE OAUTH CLIENT
@@ -53,6 +53,7 @@ app.get('/oauth2callback', async (req, res) => {
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
     tokenCache.set('google_token', tokens); // cache token
+    console.log('OAuth tokens saved');
     res.send('Authorization successful. You can close this tab.');
   } catch (err) {
     console.error('OAuth callback error:', err);
@@ -65,21 +66,25 @@ app.get('/oauth2callback', async (req, res) => {
 // ----------------------
 app.get('/reviews', async (req, res) => {
   try {
-    // Load token from cache
+    // Load cached token
     const cachedToken = tokenCache.get('google_token');
-    if (!cachedToken) return res.status(401).send('Not authorized. Please visit /auth first.');
+    if (!cachedToken) return res.status(401).send('Not authorized. Visit /auth first.');
 
     oAuth2Client.setCredentials(cachedToken);
 
-    const businessprofile = google.businessprofile({ version: 'v1', auth: oAuth2Client });
+    // Correct Google API initialization
+    const businessprofile = google.businessprofile('v1');
+
+    console.log('Fetching reviews for:', `accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}`);
 
     const response = await businessprofile.accounts.locations.reviews.list({
-      parent: `accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}`
+      parent: `accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}`,
+      auth: oAuth2Client
     });
 
     const reviews = response.data.reviews || [];
 
-    // Format for Wix embedding
+    // Format reviews for frontend
     const formatted = reviews.map(r => ({
       author: r.reviewer?.displayName || 'Anonymous',
       rating: r.starRating,
