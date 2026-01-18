@@ -1,91 +1,102 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const NodeCache = require("node-cache");
-const { google } = require("googleapis");
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const { google } = require('googleapis');
+const NodeCache = require('node-cache');
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
-const cache = new NodeCache({ stdTTL: 21600 }); // 6 hours
+const PORT = process.env.PORT || 3000;
 
-const oauth2Client = new google.auth.OAuth2(
+// ----------------------
+// TOKEN CACHE
+// ----------------------
+const tokenCache = new NodeCache({ stdTTL: 3600 * 24 }); // 24h cache
+
+// ----------------------
+// GOOGLE BUSINESS PROFILE IDS
+// ----------------------
+const ACCOUNT_ID = '15209761812700196433'; // Business Profile ID
+const LOCATION_ID = '16343617315798725542'; // Location ID / Store Code
+
+// ----------------------
+// GOOGLE OAUTH CLIENT
+// ----------------------
+const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
 
-// Health check
-app.get("/", (req, res) => {
-  res.send("OTG Google Reviews API running");
-});
-
-// OAuth start
-app.get("/auth", (req, res) => {
-  const url = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: ["https://www.googleapis.com/auth/business.manage"],
-    prompt: "consent",
+// ----------------------
+// ROUTE: Start OAuth
+// ----------------------
+app.get('/auth', (req, res) => {
+  const authUrl = oAuth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: ['https://www.googleapis.com/auth/business.manage'],
+    prompt: 'consent'
   });
-  res.redirect(url);
+  res.redirect(authUrl);
 });
 
-// OAuth callback
-app.get("/oauth2callback", async (req, res) => {
+// ----------------------
+// ROUTE: OAuth Callback
+// ----------------------
+app.get('/oauth2callback', async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.send('No code provided');
+
   try {
-    const { tokens } = await oauth2Client.getToken(req.query.code);
-    oauth2Client.setCredentials(tokens);
-    cache.set("tokens", tokens);
-    res.send("Authorization successful. You can close this tab.");
+    const { tokens } = await oAuth2Client.getToken(code);
+    oAuth2Client.setCredentials(tokens);
+    tokenCache.set('google_token', tokens); // cache token
+    res.send('Authorization successful. You can close this tab.');
   } catch (err) {
-    res.status(500).send("Auth failed");
+    console.error('OAuth callback error:', err);
+    res.status(500).send('Authorization failed');
   }
 });
 
-// Fetch reviews
-app.get("/reviews", async (req, res) => {
+// ----------------------
+// ROUTE: Fetch Reviews
+// ----------------------
+app.get('/reviews', async (req, res) => {
   try {
-    const cached = cache.get("reviews");
-    if (cached) return res.json(cached);
+    // Load token from cache
+    const cachedToken = tokenCache.get('google_token');
+    if (!cachedToken) return res.status(401).send('Not authorized. Please visit /auth first.');
 
-    const tokens = cache.get("tokens");
-    if (!tokens) return res.status(401).send("Not authorized");
+    oAuth2Client.setCredentials(cachedToken);
 
-    oauth2Client.setCredentials(tokens);
+    const businessprofile = google.businessprofile({ version: 'v1', auth: oAuth2Client });
 
-    const business = google.mybusinessbusinessinformation({
-      version: "v1",
-      auth: oauth2Client,
+    const response = await businessprofile.accounts.locations.reviews.list({
+      parent: `accounts/${ACCOUNT_ID}/locations/${LOCATION_ID}`
     });
 
-    const accounts = await business.accounts.list();
-    const accountName = accounts.data.accounts[0].name;
+    const reviews = response.data.reviews || [];
 
-    const locations = await business.accounts.locations.list({
-      parent: accountName,
-      readMask: "name",
-    });
+    // Format for Wix embedding
+    const formatted = reviews.map(r => ({
+      author: r.reviewer?.displayName || 'Anonymous',
+      rating: r.starRating,
+      comment: r.comment || '',
+      createTime: r.createTime
+    }));
 
-    const locationName = locations.data.locations[0].name;
-
-    const reviewsApi = google.mybusinessreviews({
-      version: "v1",
-      auth: oauth2Client,
-    });
-
-    const reviews = await reviewsApi.accounts.locations.reviews.list({
-      parent: locationName,
-    });
-
-    cache.set("reviews", reviews.data.reviews);
-    res.json(reviews.data.reviews);
+    res.json(formatted);
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Error fetching reviews");
+    console.error('Error fetching reviews:', err);
+    res.status(500).send('Error fetching reviews');
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`Server running on port ${PORT}`)
-);
+// ----------------------
+// START SERVER
+// ----------------------
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
